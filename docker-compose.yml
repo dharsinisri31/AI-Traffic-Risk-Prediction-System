@@ -1,0 +1,22 @@
+services:
+  backend:
+    build: .
+    image: ai-traffic-risk-system:latest
+    container_name: ai-traffic-backend
+    command: uvicorn backend.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  frontend:
+    build: .
+    image: ai-traffic-risk-system:latest
+    container_name: ai-traffic-frontend
+    command: streamlit run frontend/app.py --server.address=0.0.0.0 --server.port=8501
+    ports:
+      - "8501:8501"
+    depends_on:
+      - backend
+    environment:
+      - API_URL=http://backend:8000
+    restart: unless-stopped
