@@ -1,30 +1,31 @@
+# Use official Python 3.11 slim image for a lightweight, secure container
 FROM python:3.11-slim
 
-# Set environment variables
+# Prevent Python from writing .pyc files and buffer stdout/stderr
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_DEFAULT_TIMEOUT=120
+    PIP_NO_CACHE_DIR=1
 
-# Set working directory
+# Set container working directory
 WORKDIR /app
 
-# Upgrade pip and install wheel
-RUN pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org --upgrade pip setuptools wheel
+# Install system dependencies if required for compiling C/C++ packages
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install dependencies in modular layers with retries to prevent connection drops & enable layer caching
-RUN pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org --retries 10 fastapi uvicorn pydantic requests joblib plotly
-RUN pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org --retries 10 numpy pandas
-RUN pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org --retries 10 scikit-learn
-RUN pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org --retries 10 xgboost
-RUN pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org --retries 10 streamlit
-
-# Copy requirements.txt for reference
+# Copy and install python dependencies first to leverage Docker layer caching
 COPY requirements.txt .
+RUN pip install --upgrade pip && \
+    pip install -r requirements.txt
 
-# Copy backend and frontend application source code and models
+# Copy backend application, trained pickle models, and frontend code
 COPY backend/ ./backend/
 COPY frontend/ ./frontend/
 
-# Expose FastAPI and Streamlit ports
+# Expose ports for FastAPI (8000) and Streamlit (8501)
 EXPOSE 8000 8501
+
+# Default command (will be overridden by docker-compose for each specific service)
+CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]

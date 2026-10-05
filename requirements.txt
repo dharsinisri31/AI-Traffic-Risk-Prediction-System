@@ -1,11 +1,17 @@
-fastapi
-uvicorn
-pandas
-numpy
-scikit-learn
-xgboost
-joblib
-pydantic
-streamlit
-plotly
-requests
+# FastAPI Backend Framework & Server
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.5.0
+python-multipart>=0.0.6
+
+# Streamlit Frontend & Visualization
+streamlit>=1.30.0
+plotly>=5.18.0
+requests>=2.31.0
+
+# Pinned Core Machine Learning & Data Processing Dependencies (Exact Google Colab Environment)
+scikit-learn==1.6.1
+xgboost==3.4.1
+pandas==2.2.3
+numpy==2.1.3
+joblib==1.6.0

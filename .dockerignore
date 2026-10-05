@@ -1,11 +1,24 @@
-venv/
+# Virtual Environments
 .venv/
+venv/
+env/
+
+# Python Cache & Bytecode
 __pycache__/
-pycache/
 *.pyc
 *.pyo
 *.pyd
+
+# Git & Version Control
 .git/
 .gitignore
+
+# Environment & Secrets
 .env
 .streamlit/secrets.toml
+
+# IDE & OS Artifacts
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

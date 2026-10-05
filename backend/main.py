@@ -1,8 +1,16 @@
+"""
+AI Traffic Risk Prediction System - FastAPI Application Entry Point
+
+This file initializes the FastAPI application, mounts CORS middleware,
+manages model preloading on startup, registers route handlers,
+and configures global exception handling.
+"""
+
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, status, Request
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from backend.schemas import (
     HealthResponse,
@@ -10,45 +18,55 @@ from backend.schemas import (
     CongestionPredictionResponse,
     AccidentInputSchema,
     AccidentPredictionResponse,
+    ErrorResponse,
 )
 from backend.predictor import (
     get_predictor,
+    ModelArtifactMissingError,
     ModelLoadError,
     PredictionExecutionError,
 )
 
-# Configure logging
+# Configure structured logging
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    format="%(asctime)s [%(levelname)s] %(name)s - %(message)s"
 )
-logger = logging.getLogger("ai_traffic_system")
+logger = logging.getLogger("ai_traffic_system.api")
 
+
+# Application lifespan context manager to load models at startup
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    Application lifespan handler to load ML models once at startup.
+    Lifespan event handler that loads models into memory on server startup
+    and handles graceful shutdown.
     """
-    logger.info("Initializing AI Traffic Risk Prediction System backend...")
+    logger.info("Initializing AI Traffic Risk Prediction System...")
     try:
         predictor = get_predictor()
-        logger.info("Predictor initialized successfully.")
+        logger.info(
+            f"API ready with {len(predictor.congestion_features)} congestion features "
+            f"and {len(predictor.accident_features)} accident features."
+        )
     except Exception as e:
-        logger.critical(f"Failed to initialize models during startup: {e}")
+        logger.critical(f"Startup model load failed: {e}", exc_info=True)
     yield
-    logger.info("Shutting down AI Traffic Risk Prediction System backend...")
+    logger.info("Shutting down AI Traffic Risk Prediction System.")
 
+
+# Create FastAPI application
 app = FastAPI(
-    title="AI-Based Traffic Congestion & Accident Risk Prediction System",
+    title="AI Traffic Risk Prediction System API",
     description=(
-        "Decision-support system providing AI-based traffic congestion analysis and "
-        "accident risk estimation using pre-trained machine learning models."
+        "REST API powered by Machine Learning for real-time traffic congestion prediction "
+        "and estimated accident risk assessment based on meteorological and temporal data."
     ),
     version="1.0.0",
     lifespan=lifespan,
 )
 
-# CORS configuration
+# Enable CORS for frontend integration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -57,104 +75,154 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Custom exception handler to hide internal tracebacks from API clients
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    logger.error(f"Unhandled server error on {request.url.path}: {exc}", exc_info=True)
+
+# Global Exception Handlers
+@app.exception_handler(ModelArtifactMissingError)
+async def model_missing_exception_handler(request, exc: ModelArtifactMissingError):
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={"detail": "An internal server error occurred while processing the prediction request."}
+        content={"detail": str(exc), "error_type": "ModelArtifactMissingError"},
     )
+
 
 @app.exception_handler(ModelLoadError)
-async def model_load_exception_handler(request: Request, exc: ModelLoadError):
-    logger.error(f"Model loading error on {request.url.path}: {exc}")
+async def model_load_exception_handler(request, exc: ModelLoadError):
     return JSONResponse(
-        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        content={"detail": f"Model service unavailable: {str(exc)}"}
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={"detail": str(exc), "error_type": "ModelLoadError"},
     )
+
 
 @app.exception_handler(PredictionExecutionError)
-async def prediction_error_handler(request: Request, exc: PredictionExecutionError):
-    logger.error(f"Prediction execution error on {request.url.path}: {exc}")
+async def prediction_execution_exception_handler(request, exc: PredictionExecutionError):
     return JSONResponse(
         status_code=status.HTTP_400_BAD_REQUEST,
-        content={"detail": f"Prediction failed: {str(exc)}"}
+        content={"detail": str(exc), "error_type": "PredictionExecutionError"},
     )
 
-@app.get(
-    "/",
-    summary="Root",
-    tags=["System"]
-)
+
+# Root Endpoint
+@app.get("/", summary="Root index", tags=["System"])
 async def root():
+    """Returns a welcome message with a link to interactive documentation."""
     return {
-        "message": "AI-Based Traffic Congestion & Accident Risk Prediction API is running.",
-        "documentation": "/docs",
-        "health_check": "/health"
+        "message": "Welcome to the AI Traffic Risk Prediction System API",
+        "docs_url": "/docs",
+        "health_check": "/health",
     }
 
+
+# Health Check Endpoint
 @app.get(
     "/health",
     response_model=HealthResponse,
-    summary="Health Check",
-    tags=["System"]
+    summary="Service Health Check",
+    tags=["System"],
 )
 async def health_check():
     """
-    Health check endpoint returning system operational status.
+    Verifies that the API service is alive and that the ML models and feature column
+    artifacts are successfully loaded in memory.
     """
-    return {"status": "healthy"}
+    try:
+        predictor = get_predictor()
+        models_ready = (
+            predictor.congestion_model is not None and
+            predictor.accident_model is not None
+        )
+        return HealthResponse(
+            status="healthy" if models_ready else "degraded",
+            service="AI Traffic Risk Prediction System API",
+            models_loaded=models_ready,
+            congestion_features_count=len(predictor.congestion_features),
+            accident_features_count=len(predictor.accident_features),
+        )
+    except Exception as e:
+        logger.error(f"Health check encountered error: {e}")
+        return HealthResponse(
+            status="unhealthy",
+            service="AI Traffic Risk Prediction System API",
+            models_loaded=False,
+            congestion_features_count=0,
+            accident_features_count=0,
+        )
 
+
+# Congestion Prediction Endpoint
 @app.post(
     "/predict/congestion",
     response_model=CongestionPredictionResponse,
-    summary="Predict Traffic Congestion",
-    tags=["Prediction"]
+    responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    summary="Predict Traffic Congestion Level",
+    tags=["Predictions"],
 )
 async def predict_congestion(payload: CongestionInputSchema):
     """
-    Accepts traffic and environmental features, aligns them with the trained model's feature schema,
-    and returns the predicted congestion level, confidence score, and tailored recommendation.
+    Receives traffic and weather parameters, aligns them with the trained 73-feature columns,
+    and predicts the traffic congestion level (`Low`, `Medium`, or `High`).
     """
     try:
         predictor = get_predictor()
-        # Convert schema to dict using aliases to preserve exact feature names
-        input_dict = payload.model_dump(by_alias=True)
-        result = predictor.predict_congestion(input_dict)
-        return result
-    except (ModelLoadError, PredictionExecutionError) as e:
-        raise
-    except Exception as e:
-        logger.error(f"Error in congestion prediction route: {e}", exc_info=True)
+        input_data = payload.model_dump()
+        result = predictor.predict_congestion(input_data)
+        return CongestionPredictionResponse(**result)
+    except (ModelArtifactMissingError, ModelLoadError) as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Error processing traffic congestion prediction."
+            detail=str(e),
+        )
+    except PredictionExecutionError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    except Exception as e:
+        logger.error(f"Unexpected error in /predict/congestion: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An unexpected prediction error occurred: {str(e)}",
         )
 
+
+# Accident Risk Prediction Endpoint
 @app.post(
     "/predict/accident",
     response_model=AccidentPredictionResponse,
-    summary="Predict Accident Risk",
-    tags=["Prediction"]
+    responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    summary="Predict Estimated Accident Risk",
+    tags=["Predictions"],
 )
 async def predict_accident(payload: AccidentInputSchema):
     """
-    Accepts traffic and environmental features, aligns them with the trained model's feature schema,
-    and returns an AI-based accident risk estimation (Low, Moderate, High), risk percentage,
-    and safety recommendation.
+    Receives traffic and weather parameters, aligns them with the trained 73-feature columns,
+    and returns an **ESTIMATED ACCIDENT RISK** (`Low`, `Moderate`, or `High`).
+
+    **Notice**: The training dataset does not contain verified real accident labels;
+    thus, this output is strictly an estimated risk metric for decision support.
     """
     try:
         predictor = get_predictor()
-        # Convert schema to dict using aliases to preserve exact feature names
-        input_dict = payload.model_dump(by_alias=True)
-        result = predictor.predict_accident_risk(input_dict)
-        return result
-    except (ModelLoadError, PredictionExecutionError) as e:
-        raise
-    except Exception as e:
-        logger.error(f"Error in accident prediction route: {e}", exc_info=True)
+        input_data = payload.model_dump()
+        result = predictor.predict_accident_risk(input_data)
+        return AccidentPredictionResponse(**result)
+    except (ModelArtifactMissingError, ModelLoadError) as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Error processing accident risk prediction."
+            detail=str(e),
         )
+    except PredictionExecutionError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    except Exception as e:
+        logger.error(f"Unexpected error in /predict/accident: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An unexpected prediction error occurred: {str(e)}",
+        )
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=True)

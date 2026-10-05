@@ -1,22 +1,48 @@
 services:
+  # ----------------------------------------------------------------------------
+  # 1. FastAPI Backend Service (Model Inference API)
+  # ----------------------------------------------------------------------------
   backend:
-    build: .
-    image: ai-traffic-risk-system:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: ai-traffic-backend
     command: uvicorn backend.main:app --host 0.0.0.0 --port 8000
     ports:
       - "8000:8000"
     restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - traffic-network
 
+  # ----------------------------------------------------------------------------
+  # 2. Streamlit Frontend Service (Interactive UI)
+  # ----------------------------------------------------------------------------
   frontend:
-    build: .
-    image: ai-traffic-risk-system:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: ai-traffic-frontend
     command: streamlit run frontend/app.py --server.address=0.0.0.0 --server.port=8501
     ports:
       - "8501:8501"
-    depends_on:
-      - backend
+    restart: unless-stopped
     environment:
       - API_URL=http://backend:8000
-    restart: unless-stopped
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - traffic-network
+
+networks:
+  traffic-network:
+    driver: bridge
